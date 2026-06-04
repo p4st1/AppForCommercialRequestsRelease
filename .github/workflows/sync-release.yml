@@ -1,0 +1,54 @@
+name: Sync Release from Private Repo
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: write
+
+env:
+  PRIVATE_REPO: p4st1/AppForCommercialRequests
+  PUBLIC_REPO: ${{ github.repository }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get latest private release
+        id: private_release
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_RELEASE_TOKEN }}
+        run: |
+          gh api repos/${PRIVATE_REPO}/releases/latest > release.json
+          echo "tag=$(jq -r .tag_name release.json)" >> $GITHUB_OUTPUT
+          echo "name=$(jq -r .name release.json)" >> $GITHUB_OUTPUT
+          jq -r .body release.json > body.md
+
+      - name: Download private release assets
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_RELEASE_TOKEN }}
+        run: |
+          mkdir -p assets
+          gh release download "${{ steps.private_release.outputs.tag }}" \
+            --repo "${PRIVATE_REPO}" \
+            --dir assets
+
+      - name: Create or update public release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.private_release.outputs.tag }}"
+
+          if gh release view "$TAG" --repo "${PUBLIC_REPO}" >/dev/null 2>&1; then
+            gh release upload "$TAG" assets/* \
+              --repo "${PUBLIC_REPO}" \
+              --clobber
+          else
+            gh release create "$TAG" assets/* \
+              --repo "${PUBLIC_REPO}" \
+              --title "${{ steps.private_release.outputs.name }}" \
+              --notes-file body.md
+          fi
